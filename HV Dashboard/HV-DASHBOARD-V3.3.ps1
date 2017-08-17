@@ -34,6 +34,8 @@ param ($volumeowner, $csvvolume)
 	$CSVStorage[$h].StorageInformation = $DiskDetails.Manufacturer
 	$CSVStorage[$h].Connectivity = $DiskDetails.BusType
 }
+
+
 Function fWriteHtmlHeader 
 	{ 
 	param($FileName) 
@@ -182,7 +184,7 @@ Function fWriteSubRowNodeName
 	{
 	Param ($FileName, $nodeName, $TotMem, $AvailMem, $AvailMemPC, $hostMemHealth,[PSObject]$HostCPUPerf)
 
-    $CPUPerf = $HostCPUPerf | where { ($_.ComputerName).tolower() -eq $NodeName.tolower() } #| Select-object PercentRunTime | Measure-object -Average -Maximum
+    $CPUPerf = $HostCPUPerf | where { ($_.ComputerName).tolower() -eq $NodeName.tolower() } | Select-Object -Last 72  #| Select-object PercentRunTime | Measure-object -Average -Maximum
     $CPUPerf = $CPUPerf.PercentRunTime | Measure-object -Average -Maximum
 
     [Array]$WarningLevel = "#77FF5B","#FFF632","#FF6B6B","#FF0040"
@@ -228,15 +230,23 @@ Function fWriteSubHeadingHostDetails
 	Add-Content $FileName  "</tr>" 
 	Add-Content $FileName  "</table>" 
     	}
-Function fWriteVMInfo
-	{ 
+
+#-----------------------------------------------------------------------------------------
+
+Function fWriteVMInfo {
+
+<#
+    .Synopsis
+        Outputs the stats info about each VM
+#>
+ 
 
     [CmdletBinding()]
 	Param($FileName, $vmname, $utime, $ic, $clusterrole, $vProc, $Startmem, $MinMem, $MaxMem, $AvgMem, $hostmemhealth, $vd1storage, $vd1, $vdu1, $vd1FP, $vd1StorageHealth, $vdtype1, $vd2Storage, $vd2, $vdu2, $vd2fp, $vd2StorageHealth, $vdtype2, $vd3Storage, $vd3, $vdu3, $vd3fp, $vd3StorageHealth, $vdtype3, $vNetworkInterfaceType, $SSDate, $ICStatus, $vhealth, 
         [PSObject]$VMCPUPerf
     )
 
-    $CPUPerf = $VMCPUPerf | where { ($_.ComputerName).tolower() -eq $vmName.tolower() } #| Select-object PercentRunTime | Measure-object -Average -Maximum
+    $CPUPerf = $VMCPUPerf | where { ($_.ComputerName).tolower() -eq $vmName.tolower() } | Select-Object -last 72 #| Select-object PercentRunTime | Measure-object -Average -Maximum
     $CPUPerf = $CPUPerf.PercentRunTime | Measure-object -Average -Maximum
 
     [Array]$WarningLevel = "#77FF5B","#FFF632","#FF6B6B","#FF0040"
@@ -399,7 +409,7 @@ Function fWriteStorageInfo
 	#Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$volRaid</td>"
 	Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$volStorage</td>"
 	Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$volConnection</td>"
-	Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$volTotal TB</td>"
+	Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$($volTotal*1024) GB ($VolTotal TB)</td>"
 	Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$volFree GB</td>"
 	Add-Content $FileName "<td width='8%' BGCOLOR='$volhealthcode' align=center>$volFreePC %</td>"
     	Add-Content $FileName "<td width='8%' align=center>$VHDXAlloc GB</td>"
@@ -408,25 +418,65 @@ Function fWriteStorageInfo
 	#Add-Content $FileName "<td width='10%' align=center>$pcoverprov</td>"
 	Add-Content $FileName "</tr>"
     }
-Function fCreateDashBoard
-	{ 
-    	Param($Name, $Type)
-	If ($Type -match "Cluster")
-		{
+
+#-----------------------------------------------------------------------------------------
+
+Function fCreateDashBoard {
+
+<#
+    .Synopsis
+        Builds the bulk of the Dashboard
+        
+    .Description
+        This function is split into two parts.  One runs if the host belongs to a cluster.  The other if it is a standalone host.   
+
+    .Parameter Name
+        Name of they Hyper-V HOst
+
+    .parameter Type
+        Either Cluster or StandAlone.
+#>
+ 
+    Param($Name, $Type)
+	
+    If ($Type -match "Cluster") {
 		Write-Host ("Fetching CSV Information from Cluster "+$Name) -foregroundcolor green
+        
+        # ----- Writes the Sub Heading describing cluster or stand alone.  Line 2
 		fWriteSubHeadingClusterOrStandAlone $ResultFile ("Cluster - " +$name)
+
 		[array] $CSVstorage = Get-ClusterSharedVolume -Cluster $Name| select Ownernode -Expand SharedVolumeInfo |select FriendlyVolumeName, Ownernode , @{n="Name";e={($_.friendlyvolumename).TrimStart("C:\ClusterStorage\")}},  @{n="Capacity";e={$_.Partition.Size}}, @{n="UsedSpace";e={$_.Partition.UsedSpace}}, @{n="FreeSpace";e={$_.Partition.FreeSpace}}, @{n="FreeSpacePC";e={$_.Partition.PercentFree}}, @{n="VHDXAllocatedSpace";e={0}}, @{n="VHDXActualUsage";e={0}}, @{n="VolumeHealthCode";e={[int]"0"}} , @{n="DiskGuid";e={$_.Partition.Name}}, @{n="DiskType";e={"NA"}}, @{n="RaidType";e={"NA"}}, @{n="Connectivity";e={"NA"}}, @{n="StorageInformation";e={"NA"}}
 		$CSVCount = $CSVStorage.length
-		For ($h=0; $h -lt $CSVCount; $h++)
-			{
+
+        # ----- Calculate Health of CSV FreeSpace
+		For ($h=0; $h -lt $CSVCount; $h++) {
 			Get-CSVtoPhysicalDiskMapping $CSVStorage[$h].OwnerNode.name $CSVStorage[$h].DiskGuid
-			If (($CSVStorage.FreeSpacepc[$h] -le "10") -OR ($CSVStorage.FreeSpace[$h] -lt "53687091200")){[int] $CSVStorage[$h].VolumeHealthCode = "3"}
-			ElseIf ((($CSVStorage.FreeSpacepc[$h] -le "20") -And ($CSVStorage.FreeSpace[$h] -gt 10)) -OR ($CSVStorage.FreeSpace[$h] -lt "107374182400")){[int] $CSVStorage[$h].VolumeHealthCode = "2"}
-			ElseIf ((($CSVStorage.FreeSpacepc[$h] -le "30") -And ($CSVStorage.FreeSpace[$h] -gt 20)) -OR ($CSVStorage.FreeSpace[$h] -lt "214748364800")){[int] $CSVStorage[$h].VolumeHealthCode = 1}
-			Else {$CSVStorage[$h].VolumeHealthCode = 0}
-			}
+
+            # ----- JDB - Not sure why there is an -or on each to check is the free space is below some arbitrary number.  This cuases false warning on small drives.  Removing to see what happens.
+			#If (($CSVStorage.FreeSpacepc[$h] -le "10") -OR ($CSVStorage.FreeSpace[$h] -lt "53687091200")){[int] $CSVStorage[$h].VolumeHealthCode = "3"}
+			#ElseIf ((($CSVStorage.FreeSpacepc[$h] -le "20") -And ($CSVStorage.FreeSpace[$h] -gt 10)) -OR ($CSVStorage.FreeSpace[$h] -lt "107374182400")){[int] $CSVStorage[$h].VolumeHealthCode = "2"}
+			#ElseIf ((($CSVStorage.FreeSpacepc[$h] -le "30") -And ($CSVStorage.FreeSpace[$h] -gt 20)) -OR ($CSVStorage.FreeSpace[$h] -lt "214748364800")){[int] $CSVStorage[$h].VolumeHealthCode = 1}
+			#Else {$CSVStorage[$h].VolumeHealthCode = 0}
+
+            If ($CSVStorage.FreeSpacepc[$h] -le "10"){
+                [int] $CSVStorage[$h].VolumeHealthCode = "3"
+            }
+			ElseIf ($CSVStorage.FreeSpacepc[$h] -le "20") {
+                [int] $CSVStorage[$h].VolumeHealthCode = "2"
+            }
+			ElseIf ($CSVStorage.FreeSpacepc[$h] -le "30"){
+                [int] $CSVStorage[$h].VolumeHealthCode = 1
+            }
+			Else {
+                $CSVStorage[$h].VolumeHealthCode = 0
+            }
+		}
+
 		[array] $cNodes = Get-Cluster $Name|Get-ClusterNode |Where {$_.state -eq "Up"} |Select Name
 		$nodecount = $cNodes.length
+
+        
+        # ----- Creates an array of objects that will hold the detailed info from each Hyper-V Node in the Cluster
 		[array] $hostDetails = Get-Cluster $Name|Get-ClusterNode|Select name, @{Label="TotalPhysicalMemory"; Expression={[int]""}}, @{Label="AvailablePhysicalMemory"; Expression={[int]""}}, @{Label="AvailablePhysicalMemoryPC"; Expression={[int]""}}, @{Label="TotalVMStartupRamAllocated"; Expression={[int]""}}, @{Label="TotalVMMaxMemoryAllocated"; Expression={[int]""}}, @{Label="Processors"; Expression={[int]""}}, @{Label="ProcessorCore"; Expression={[int]""}}, @{Label="LogicalProcessors"; Expression={[int]""}}, @{Label="vProcessors"; Expression={[int]""}}, @{Label="HostMemoryHealth"; Expression={[int]""}}, @{Label="VMs"; Expression={[int]""}}
 		For ($i=0; $i -lt $nodecount; $i++)
     			{
@@ -455,10 +505,12 @@ Function fCreateDashBoard
 			$hostDetails[$i].Processors = ($procDetails.DeviceID).Count
 			$hostDetails[$i].ProcessorCore = ($procDetails.numberofcores |Measure-Object -Sum).sum
 			$hostDetails[$i].LogicalProcessors = ($procDetails.numberoflogicalprocessors |Measure-Object -Sum).sum
-			}
+		}
 
+        # ----- Grabs the Host CPU information that is contained in the Host CPU File (This data is gathered from the scheduled task : Get-CPUPerformance from Hyper-V servers and VMs )
         $HostCPUPerf = import-csv $HostCPUFile
 
+        # ----- Loops thru each Hyper-V Node and gathers VM Info
 		For ($i=0; $i -lt $nodecount; $i++)
     			{
 			Write-Host ("Processing Virtual Servers on Hyper-V Host "+$cNodes.Name[$i]) -Foregroundcolor Green -BackgroundColor DARKGREEN
@@ -466,91 +518,98 @@ Function fCreateDashBoard
 			$vmCount = $hostDetails[$i].VMs =  $vmList.count
 			If ($vmCount -ge "1")
 				{
-
+                
+                # -----  Performance info for each Host (top of each hosts's table)
 				fWriteSubRowNodeName $ResultFile $cNodes.Name[$i] $hostDetails[$i].TotalPhysicalMemory $hostDetails[$i].AvailablePhysicalMemory $hostDetails[$i].AvailablePhysicalMemoryPC $WarningLevel[$hostDetails[$i].HostMemoryHealth] $HostCPUPerf
-				fWriteVMTableHeader $ResultFile
-				For ($j=0; $j -lt $VMcount; $j++)
-					{
+				
+                # ----- Host Table Header
+                fWriteVMTableHeader $ResultFile
+
+				For ($j=0; $j -lt $VMcount; $j++) {
 					Write-Host ("Processing VM - "+$VMList[$j].name) -foregroundcolor Green
 					$vmDetails = Get-VM -VMName $vmList[$j].name -Computer $cNodes.name[$i] |Select name, processorcount, MemoryDemand, VMID, IsClustered, @{Label="MinimumRam"; Expression={[System.Math]::Round(($_.MemoryMinimum/1073741824),2)}}, @{Label="MaximumRam"; Expression={[int]($_.MemoryMaximum/1073741824)}}, DynamicMemoryEnabled, @{Label="StartupRam"; Expression={[System.Math]::Round(($_.MemoryStartup/1073741824),2)}}, IntegrationServicesVersion, Uptime, ParentSnapshotId, IntegrationServicesState, ResourceMeteringEnabled
 					$vmHealth = [int] ($hostDetails[$i]).HostMemoryHealth
 					$hostDetails[$i].vProcessors += $vmDetails.processorcount
-					If ($vmDetails.DynamicMemoryEnabled -eq "True")
-							{
-							$hostDetails[$i].TotalVMStartupRamAllocated += $vmDetails.StartupRam
-							$hostDetails[$i].TotalVMMaxMemoryAllocated += $vmDetails.MaximumRam
-							}
-						Else
-							{
-							$hostDetails[$i].TotalVMStartupRamAllocated += $vmDetails.StartupRam
-							$hostDetails[$i].TotalVMMaxMemoryAllocated += $vmDetails.StartupRam
-							$VMDetails[0].MinimumRam = $vmDetails[0].MaximumRam = "DM Disabled"
-							}
-						If ($vmDetails.ResourceMeteringEnabled -eq "True")
-							{
-							[int] $AvgMemUsage = (((Measure-VM -ComputerName $cNodes.Name[$i]  -VMName $VMList.name[$j]).AvgRam)/1024)
-							}
-						Else 
-							{
-							[string] $AvgMemUsage = "NA"
-							}
-						If (Get-VHD -VMID $vmDetails.VMID -ComputerName $cNodes.Name[$i])
-							{
-							[array] $DiskDetails = Get-VHD -VMID $vmDetails.VMID -ComputerName $cNodes[$i].Name | Select path, FragmentationPercentage, @{Label="VolName"; Expression={""}}, @{Label="AllocatedSize"; Expression={$_.Size}}, @{Label="CurrentUsage"; Expression={$_.FileSize}}, @{Label="vDiskType"; Expression={""}}, @{Label="vDiskVolumeHealth"; Expression={""}}
-							$vDiskcount = $DiskDetails.count
-                                #write-host $vDiskCount
-							For ($k = 0; $k -lt $vdiskcount; $k++)
-								{		
-								$VolInfo = (($DiskDetails[$k]).path).split('\')[2]
-								$DiskDetails[$k].VolName = IF (($DiskDetails[$k]).Path -match "C:\\ClusterStorage") {($DiskDetails[$k].Path).Split("\")[2]} Else {($DiskDetails[$k].Path).Substring(0,2)}
-								$DiskDetails[$k].VolName =  (Get-Culture).textinfo.totitlecase($DiskDetails[$k].VolName)
-								$DiskDetails[$k].vDiskType = (($DiskDetails[$k]).path).split('.')[1]
-								$VolIndex = [array]::indexof($CSVstorage.name,$DiskDetails[$k].VolName)
-								$CSVStorage[$VolIndex].VHDXAllocatedSpace = $CSVStorage[$VolIndex].VHDXAllocatedSpace + $DiskDetails[$k].AllocatedSize
-								$CSVStorage[$VolIndex].VHDXActualUsage = $CSVStorage[$VolIndex].VHDXActualUsage + $DiskDetails[$k].CurrentUsage
-								$DiskDetails[$k].vDiskVolumeHealth = $CSVStorage.VolumeHealthCode[$VolIndex]
+
+                    # ----- VM RAM
+					If ($vmDetails.DynamicMemoryEnabled -eq "True")	{
+						$hostDetails[$i].TotalVMStartupRamAllocated += $vmDetails.StartupRam
+						$hostDetails[$i].TotalVMMaxMemoryAllocated += $vmDetails.MaximumRam
+					}
+					Else {
+						$hostDetails[$i].TotalVMStartupRamAllocated += $vmDetails.StartupRam
+						$hostDetails[$i].TotalVMMaxMemoryAllocated += $vmDetails.StartupRam
+						$VMDetails[0].MinimumRam = $vmDetails[0].MaximumRam = "DM Disabled"
+					}
+
+					If ($vmDetails.ResourceMeteringEnabled -eq "True") {
+						[int] $AvgMemUsage = (((Measure-VM -ComputerName $cNodes.Name[$i]  -VMName $VMList.name[$j]).AvgRam)/1024)
+					}
+					Else {
+						[string] $AvgMemUsage = "NA"
+					}
+
+                    # ----- VM VHD info
+					If (Get-VHD -VMID $vmDetails.VMID -ComputerName $cNodes.Name[$i]) {
+						[array] $DiskDetails = Get-VHD -VMID $vmDetails.VMID -ComputerName $cNodes[$i].Name | Select path, FragmentationPercentage, @{Label="VolName"; Expression={""}}, @{Label="AllocatedSize"; Expression={$_.Size}}, @{Label="CurrentUsage"; Expression={$_.FileSize}}, @{Label="vDiskType"; Expression={""}}, @{Label="vDiskVolumeHealth"; Expression={""}}
+						$vDiskcount = $DiskDetails.count
+                            #write-host $vDiskCount
+						
+                        For ($k = 0; $k -lt $vdiskcount; $k++) {		
+							$VolInfo = (($DiskDetails[$k]).path).split('\')[2]
+							$DiskDetails[$k].VolName = IF (($DiskDetails[$k]).Path -match "C:\\ClusterStorage") {($DiskDetails[$k].Path).Split("\")[2]} Else {($DiskDetails[$k].Path).Substring(0,2)}
+							$DiskDetails[$k].VolName =  (Get-Culture).textinfo.totitlecase($DiskDetails[$k].VolName)
+							$DiskDetails[$k].vDiskType = (($DiskDetails[$k]).path).split('.')[1]
+							$VolIndex = [array]::indexof($CSVstorage.name,$DiskDetails[$k].VolName)
+							$CSVStorage[$VolIndex].VHDXAllocatedSpace = $CSVStorage[$VolIndex].VHDXAllocatedSpace + $DiskDetails[$k].AllocatedSize
+							$CSVStorage[$VolIndex].VHDXActualUsage = $CSVStorage[$VolIndex].VHDXActualUsage + $DiskDetails[$k].CurrentUsage
+							$DiskDetails[$k].vDiskVolumeHealth = $CSVStorage.VolumeHealthCode[$VolIndex]
                                    
-								}
-							}
-						$volHealthMax = $DiskDetails.vDiskVolumeHealth
-						IF ($volHealthMax -gt $VMHealth) { $vmHealth = $volHealthMax }
-						If ($VMDetails.ParentSnapshotId)
-							{
-							$SnapShotDate = ((Get-VMSnapshot -VMName $vmDetails.name -ComputerName $cNodes.Name[$i]).CreationTime |Sort-Object |Select-Object -First 1).ToShortDateString()
-							}
-						Else 
-							{
-							[String]$SnapShotDate = "NA"
-							}
-					 	If ((Get-VMNetworkAdapter -VMName $vmDetails.Name -ComputerName $cNodes.Name[$i]).Count -eq "1")
-							{
-							$vNicType = (Get-VMNetworkAdapter -VMName $vmDetails.Name -ComputerName $cNodes.Name[$i]).IsLegacy
-							}
-                        
-                        $VMCPUPerf = import-csv $VMCPUFile
-                        
-						IF ($vDiskCount -gt "2") 
-							{
-							fWriteVMInfo  $ResultFile $vmDetails.name $vmDetails.UpTime $vmDetails.IntegrationServicesVersion $vmDetails.IsClustered $vmDetails.ProcessorCount $vmDetails.StartupRam $vmDetails.MinimumRam $vmDetails.MaximumRam $AvgMemUsage $WarningLevel[$hostDetails[$i].HostMemoryHealth] $DiskDetails[0].VolName ([int]($DiskDetails.AllocatedSize[0]/1073741824)) ([int]($DiskDetails.CurrentUsage[0]/1073741824)) $DiskDetails[0].FragmentationPercentage $WarningLevel[$DiskDetails[0].vDiskVolumeHealth] $DiskDetails[0].vDiskType $DiskDetails[1].VolName  ([int]($DiskDetails.AllocatedSize[1]/1073741824)) ([int]($DiskDetails.CurrentUsage[1]/1073741824)) $DiskDetails[1].FragmentationPercentage $WarningLevel[$DiskDetails[1].vDiskVolumeHealth]  $DiskDetails[1].vDiskType $DiskDetails[2].VolName  ([int]($DiskDetails.AllocatedSize[2]/1073741824)) ([int]($DiskDetails.CurrentUsage[2]/1073741824)) $DiskDetails[2].FragmentationPercentage $WarningLevel[$DiskDetails[2].vDiskVolumeHealth]  $DiskDetails[2].vDiskType $vNicType  $SnapShotDate $vmDetails.IntegrationServicesState $WarningLevel[$vmHealth] -VMCPUPerf $VMCPUPerf
-							}
-                        ElseIF ($vDiskCount -gt "1") 
-							{
-							fWriteVMInfo  $ResultFile $vmDetails.name $vmDetails.UpTime $vmDetails.IntegrationServicesVersion $vmDetails.IsClustered $vmDetails.ProcessorCount $vmDetails.StartupRam $vmDetails.MinimumRam $vmDetails.MaximumRam $AvgMemUsage $WarningLevel[$hostDetails[$i].HostMemoryHealth] $DiskDetails[0].VolName ([int]($DiskDetails.AllocatedSize[0]/1073741824)) ([int]($DiskDetails.CurrentUsage[0]/1073741824)) $DiskDetails[0].FragmentationPercentage $WarningLevel[$DiskDetails[0].vDiskVolumeHealth] $DiskDetails[0].vDiskType $DiskDetails[1].VolName  ([int]($DiskDetails.AllocatedSize[1]/1073741824)) ([int]($DiskDetails.CurrentUsage[1]/1073741824)) $DiskDetails[1].FragmentationPercentage $WarningLevel[$DiskDetails[1].vDiskVolumeHealth]  $DiskDetails[1].vDiskType "NA"  "NA" "NA" "NA" "NA"  "NA" $vNicType  $SnapShotDate $vmDetails.IntegrationServicesState $WarningLevel[$vmHealth] -VMCPUPerf $VMCPUPerf
-							}
-						Else
-							{
-							fWriteVMInfo  $ResultFile $vmDetails.name $vmDetails.UpTime $vmDetails.IntegrationServicesVersion $vmDetails.IsClustered $vmDetails.ProcessorCount $vmDetails.StartupRam $vmDetails.MinimumRam $vmDetails.MaximumRam $AvgMemUsage $WarningLevel[$hostDetails[$i].HostMemoryHealth] $DiskDetails[0].VolName ([int]($DiskDetails.AllocatedSize[0]/1073741824)) ([int]($DiskDetails.CurrentUsage[0]/1073741824)) $DiskDetails[0].FragmentationPercentage $WarningLevel[$DiskDetails[0].vDiskVolumeHealth] $DiskDetails[0].vDiskType "NA"  "NA" "NA" "NA" "NA"  "NA" "NA"  "NA" "NA" "NA" "NA"  "NA" $vNicType  $SnapShotDate $vmDetails.IntegrationServicesState $WarningLevel[$vmHealth] -VMCPUPerf $VMCPUPerf
-							}
-						Write-Host "Finished processing VM  - " $vmDetails.name -ForegroundColor Yellow -BackgroundColor DarkGreen
-					    		}
-			Write-Host "Finished Processing  VMs on Hyper-V Cluster Node - "  $cNodes.Name[$i] -ForegroundColor white -BackgroundColor BLUE
+						}
+					}
+
+					$volHealthMax = $DiskDetails.vDiskVolumeHealth
+					IF ($volHealthMax -gt $VMHealth) { $vmHealth = $volHealthMax }
+
+                    # ----- Snapshot info
+					If ($VMDetails.ParentSnapshotId) {
+						$SnapShotDate = ((Get-VMSnapshot -VMName $vmDetails.name -ComputerName $cNodes.Name[$i]).CreationTime |Sort-Object |Select-Object -First 1).ToShortDateString()
+					}
+					Else {
+						[String]$SnapShotDate = "NA"
+					}
+
+                    # ----- VM NIC info
+					If ((Get-VMNetworkAdapter -VMName $vmDetails.Name -ComputerName $cNodes.Name[$i]).Count -eq "1")
+						{
+						$vNicType = (Get-VMNetworkAdapter -VMName $vmDetails.Name -ComputerName $cNodes.Name[$i]).IsLegacy
+						}
+                    
+                    # ----- Grabs the Host CPU information that is contained in the Host CPU File (This data is gathered from the scheduled task : Get-CPUPerformance from Hyper-V servers and VMs )    
+                    $VMCPUPerf = import-csv $VMCPUFile
+                    
+                    # ----- Write the VM Info to the report
+					IF ($vDiskCount -gt "2") {
+						fWriteVMInfo  $ResultFile $vmDetails.name $vmDetails.UpTime $vmDetails.IntegrationServicesVersion $vmDetails.IsClustered $vmDetails.ProcessorCount $vmDetails.StartupRam $vmDetails.MinimumRam $vmDetails.MaximumRam $AvgMemUsage $WarningLevel[$hostDetails[$i].HostMemoryHealth] $DiskDetails[0].VolName ([int]($DiskDetails.AllocatedSize[0]/1073741824)) ([int]($DiskDetails.CurrentUsage[0]/1073741824)) $DiskDetails[0].FragmentationPercentage $WarningLevel[$DiskDetails[0].vDiskVolumeHealth] $DiskDetails[0].vDiskType $DiskDetails[1].VolName  ([int]($DiskDetails.AllocatedSize[1]/1073741824)) ([int]($DiskDetails.CurrentUsage[1]/1073741824)) $DiskDetails[1].FragmentationPercentage $WarningLevel[$DiskDetails[1].vDiskVolumeHealth]  $DiskDetails[1].vDiskType $DiskDetails[2].VolName  ([int]($DiskDetails.AllocatedSize[2]/1073741824)) ([int]($DiskDetails.CurrentUsage[2]/1073741824)) $DiskDetails[2].FragmentationPercentage $WarningLevel[$DiskDetails[2].vDiskVolumeHealth]  $DiskDetails[2].vDiskType $vNicType  $SnapShotDate $vmDetails.IntegrationServicesState $WarningLevel[$vmHealth] -VMCPUPerf $VMCPUPerf
+					}
+                    ElseIF ($vDiskCount -gt "1") {
+						fWriteVMInfo  $ResultFile $vmDetails.name $vmDetails.UpTime $vmDetails.IntegrationServicesVersion $vmDetails.IsClustered $vmDetails.ProcessorCount $vmDetails.StartupRam $vmDetails.MinimumRam $vmDetails.MaximumRam $AvgMemUsage $WarningLevel[$hostDetails[$i].HostMemoryHealth] $DiskDetails[0].VolName ([int]($DiskDetails.AllocatedSize[0]/1073741824)) ([int]($DiskDetails.CurrentUsage[0]/1073741824)) $DiskDetails[0].FragmentationPercentage $WarningLevel[$DiskDetails[0].vDiskVolumeHealth] $DiskDetails[0].vDiskType $DiskDetails[1].VolName  ([int]($DiskDetails.AllocatedSize[1]/1073741824)) ([int]($DiskDetails.CurrentUsage[1]/1073741824)) $DiskDetails[1].FragmentationPercentage $WarningLevel[$DiskDetails[1].vDiskVolumeHealth]  $DiskDetails[1].vDiskType "NA"  "NA" "NA" "NA" "NA"  "NA" $vNicType  $SnapShotDate $vmDetails.IntegrationServicesState $WarningLevel[$vmHealth] -VMCPUPerf $VMCPUPerf
+					}
+					Else {
+						fWriteVMInfo  $ResultFile $vmDetails.name $vmDetails.UpTime $vmDetails.IntegrationServicesVersion $vmDetails.IsClustered $vmDetails.ProcessorCount $vmDetails.StartupRam $vmDetails.MinimumRam $vmDetails.MaximumRam $AvgMemUsage $WarningLevel[$hostDetails[$i].HostMemoryHealth] $DiskDetails[0].VolName ([int]($DiskDetails.AllocatedSize[0]/1073741824)) ([int]($DiskDetails.CurrentUsage[0]/1073741824)) $DiskDetails[0].FragmentationPercentage $WarningLevel[$DiskDetails[0].vDiskVolumeHealth] $DiskDetails[0].vDiskType "NA"  "NA" "NA" "NA" "NA"  "NA" "NA"  "NA" "NA" "NA" "NA"  "NA" $vNicType  $SnapShotDate $vmDetails.IntegrationServicesState $WarningLevel[$vmHealth] -VMCPUPerf $VMCPUPerf
+					}
+
+					Write-Host "Finished processing VM  - " $vmDetails.name -ForegroundColor Yellow -BackgroundColor DarkGreen
+				}
+
+			    Write-Host "Finished Processing  VMs on Hyper-V Cluster Node - "  $cNodes.Name[$i] -ForegroundColor white -BackgroundColor BLUE
         		Add-Content $ResultFile "</table>"
-				}
-			Else
-				{
+			}
+			Else {
 				Write-Host "NO  VMs Found on Hyper-V Server - " $cNodes.Name[$i] -Foregroundcolor Black -backgroundcolor DarkRed
-				}
+			}
 		}
+
 		fWriteSubHeadingHostDetails $ResultFile $Name
 		fWriteHostStatusTableHeader $ResultFile
 		For ($m = 0; $m -lt $nodecount; $m++)
@@ -585,8 +644,8 @@ Function fCreateDashBoard
 		$date = ( get-date ).ToString('yyyy/MM/dd') 
 		Write-Host ("Finished Processing Storage for  Cluster $name") -ForegroundColor BLACK -BackgroundColor CYAN
 	}
-	ElseIf ($type -match "StandAlone")
-	    {
+	ElseIf ($type -match "StandAlone") {
+        # ----- Process for a Stand Alone Hyper V Host
 		    Write-Host ("Processing Storage Information on StandAlone Hyper-V Host " +$Name) -Foregroundcolor Green
 			fWriteSubHeadingClusterOrStandAlone $ResultFile ("Standalone Node - " +$name)
 			[array] $LocalStorage = Get-WmiObject Win32_LogicalDisk -filter "DriveType=3" -computer $Name | Select DeviceID, Size, FreeSpace, @{n="FreeSpacePC";e={[int]($_.FreeSpace/$_.Size*100)}}, @{n="VHDXAllocatedSpace";e={0}}, @{n="VHDXActualUsage";e={0}}, @{n="VolumeHealthCode";e={[int]"0"}}
@@ -745,56 +804,57 @@ Function fCreateDashBoard
 fWriteHtmlHeader $ResultFile
 
 Write-Host "Fetching Input File" -foregroundColor Green
-If (Test-Path "$FileLocation\servers.txt")
-	{
+If (Test-Path "$FileLocation\servers.txt") {
+    # ----- Get Server\clusternode names from the text file
+
 	$sList = (Get-Content "$FileLocation\servers.txt")
 	$sCount = $sList.Count
-	If ($sCount -eq "0")
-	{
-	Write-Host "Servers.txt Empty. Please check if the input file exists and populated with server names"
+
+	If ($sCount -eq "0") {
+	    Write-Host "Servers.txt Empty. Please check if the input file exists and populated with server names"
 	}
-	If ($sCount -gt "0")
-	{
-	Write-Host "Identified Servers.txt. Checking if Servers/Clusters are Available"
-	If ($sCount -eq "1")
-		{
-		[array] $sList = $sList
+
+	If ($sCount -gt "0")  {
+	    Write-Host "Identified Servers.txt. Checking if Servers/Clusters are Available"
+	    
+        If ($sCount -eq "1") {
+		    [array] $sList = $sList
 		}
 
-    $ClusterNodes = @()
-	For ($a = 0; $a -lt $sCount; $a++)
-	{
-		Write-Host ("Checking "+$sList[$a])
+        $ClusterNodes = @()
+	    For ($a = 0; $a -lt $sCount; $a++) {
+		    Write-Host ("Checking "+$sList[$a])
 
-        # ----- Check if server is already included in discovered clusternodes
-        if ( $sList[$a] -notin $ClusterNodes ) {
+            # ----- Check if server is already included in discovered clusternodes
+            if ( $sList[$a] -notin $ClusterNodes ) {
 
-		        If (Get-Cluster $sList[$a] -erroraction SilentlyContinue)
-		        {
-		        Write-Host ("Identified cluster "+$sList[$a]) -Background White -Foreground Black
+                    # ----- Get the Cluster name
+                    $Clustername = Get-Cluster $sList[$a] -erroraction SilentlyContinue | Select-Object -ExpandProperty Name
+
+		            If ( $ClusterName ) {
+		                Write-Host ("Identified cluster "+$ClusterName) -Background White -Foreground Black
     
-                $ClusterNodes += Get-Cluster $sList[$a] | Get-ClusterNode
+                        $ClusterNodes += Get-Cluster $ClusterName | Get-ClusterNode
 
-		        fCreateDashBoard $sList[$a] "Cluster"
-		        }
-		        ElseIf ((get-vmhost $sList[$a]) -And (!(Get-Service -name clussvc -ComputerName $sList[$a] -erroraction SilentlyContinue)))
-		        {
-		        Write-Host ("Identified Standalone HyperV Server - "+$sList[$a]) -Background White -Foreground Black
-		        fCreateDashBoard $sList[$a] "StandAlone"
-		        }
-		        Else
-		        {
-		        Write-Host "Not able to identify the server as a StandAlone host or Cluster $sList[$a] " -Background White -Foreground Black
-		        }
+                        # ----- It is important to note that the first server in a cluster will call the fCreateDashBoard here.  All other nodes in the cluster will throw a waring stating it was already found in the cluster.
+		                fCreateDashBoard $ClusterName "Cluster"
+		            }
+		            ElseIf ((get-vmhost $sList[$a]) -And (!(Get-Service -name clussvc -ComputerName $sList[$a] -erroraction SilentlyContinue))) {
+		                Write-Host ("Identified Standalone HyperV Server - "+$sList[$a]) -Background White -Foreground Black
+		                fCreateDashBoard $sList[$a] "StandAlone"
+		            }
+		            Else {
+		                Write-Host "Not able to identify the server as a StandAlone host or Cluster $sList[$a] " -Background White -Foreground Black
+		            }
+                }
+                else {
+                    Write-Host "Server $($sList[$a]) already processed as part of cluster" -Background Blue -ForegroundColor White
             }
-            else {
-                Write-Host "Server $($sList[$a]) already processed as part of cluster" -Background Blue -ForegroundColor White
-        }
+	    }
 	}
-	}
-	}
-ElseIf ((Get-Cluster) -Or (Get-VMHost))
-	{
+}
+ElseIf ((Get-Cluster) -Or (Get-VMHost))	{
+    # ----- Text File does not exist  attempting to find via Get-Cluster or Get-VMHost
 	Write-Host "Checking local host for Hyper-V Role"
 	IF (Get-Cluster)
 		{
@@ -806,16 +866,18 @@ ElseIf ((Get-Cluster) -Or (Get-VMHost))
 		$sList = (Get-VmHost).name
 		fCreateDashBoard $sList "StandAlone"
 		}
-	}
-ElseIf ((!(Get-Cluster)) -And (!(Get-VMHost)) -And (!(Test-Path Servers.txt)))
-	{
+}
+ElseIf ((!(Get-Cluster)) -And (!(Get-VMHost)) -And (!(Test-Path Servers.txt))) {
+    # ----- Fail as cant find any hosts
 	Write-Host "Please provide input file or run the script from a Hyper-V Standlone Server / Hyper-V Cluster node" -ForegroundColor BLACK -BackgroundColor "Red"
 	Write-Host "#########  EXITING SCRIPT ########### " -ForegroundColor Yellow -BackgroundColor "Red"
-	}
+}
+
 fWriteHtmlFooter $ResultFile
 
 # ----- Cleanup Files in saved directory older than 14 days
 get-childitem $FileLocation\Hyperv-vm-report* | where CreationTime -le (Get-Date).AddDays( -14 ) | Remove-Item 
 
-$credentials = new-object Management.Automation.PSCredential “xxxxxxxxx”, (“xxxxxxxxx” | ConvertTo-SecureString -AsPlainText -Force)
-Send-MailMessage -To colodashboards@stratuslive.com -From HyperV-Dashboard@stratuslive.com -Body (Get-Content $Resultfile |Out-String) -SmtpServer Smtp.mailgun.org -Credential $credentials -Subject "HyperV Health Report" -BodyAsHtml
+
+$credentials = new-object Management.Automation.PSCredential “postmaster@utility.stratuslive.com”, (“c4dc3c7b0940e28258521a8537654392” | ConvertTo-SecureString -AsPlainText -Force)
+# Send-MailMessage -To colodashboards@stratuslive.com -From HyperV-Dashboard@stratuslive.com -Body (Get-Content $Resultfile |Out-String) -SmtpServer Smtp.mailgun.org -Credential $credentials -Subject "HyperV Health Report" -BodyAsHtml
